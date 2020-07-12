@@ -7,10 +7,12 @@ namespace WebLinq.Samples
     using System.Data;
     using System.Globalization;
     using System.IO;
+    using System.IO.Compression;
     using System.Linq;
     using System.Net;
     using System.Reactive.Linq;
     using System.Runtime.InteropServices;
+    using System.Text;
     using System.Text.RegularExpressions;
     using System.Xml.Linq;
     using Dsv;
@@ -362,11 +364,66 @@ namespace WebLinq.Samples
 
         static IObservable<object> Compression() =>
 
-            Http.Get(new Uri("https://httpbin.org/gzip"))
-                .Accept("application/json")
-                .AutomaticDecompression(DecompressionMethods.GZip)
-                .Text()
-                .Content();
+            from f in
+                Observable.Concat(
+                    Http.Get(new Uri("https://httpbin.org/gzip"))
+                        .Accept("application/json")
+                        .AutomaticDecompression(DecompressionMethods.GZip)
+                        .Text(),
+                    Http.Get(new Uri("https://httpbin.org/deflate"))
+                        .Accept("application/json")
+                        .ReadContent(async f =>
+                        {
+                            string contentEncoding = f.ContentHeaders["Content-Encoding"];
+                            if (string.IsNullOrEmpty(contentEncoding))
+                                return await f.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                            if (!"deflate".Equals(contentEncoding, StringComparison.OrdinalIgnoreCase))
+                                throw new NotSupportedException($"Unsupported content encoding: {contentEncoding}");
+
+                            var data = await f.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                            using (var input = new MemoryStream(data))
+                            using (var output = new MemoryStream())
+                            {
+                                // DeflateStream chokes on the "zlib" format, which is
+                                // what an encoding of "deflate" means; see section
+                                // 4.2.2, "Delate Encoding" of the HTTP specification:
+                                // https://tools.ietf.org/html/rfc7230#section-4.2.2
+                                //
+                                // So sniff whether the actual format is "deflate" or
+                                // "zlib". Since "zlib" is generally a header plus
+                                // "deflate" data, one can strip out the header and
+                                // just feed the rest to DeflateStream.
+                                //
+                                // For more information:
+                                // https://github.com/weblinq/WebLinq/issues/132
+
+                                // A zlib stream starts with a 2 byte header: CMF + FLG
+                                //
+                                // where CMF is two nibbles:
+                                //
+                                // - bits 0 to 3  CM     Compression method
+                                // - bits 4 to 7  CINFO  Compression info
+                                //
+                                // CM = 8 denotes the "deflate" compression method with
+                                // a window size up to 32K.
+                                //
+                                // Source: https://tools.ietf.org/html/rfc1950
+
+                                var cm = input.ReadByte() & 0x0f;
+                                if (cm == 8)            // 8 = deflate
+                                    input.ReadByte();   // skip second header byte (FLG)
+                                else
+                                    input.Position = 0; // rewind; this is the naked "deflate" format
+
+                                using (var ds = new DeflateStream(input, CompressionMode.Decompress))
+                                    ds.CopyTo(output);
+
+                                var encoding = f.ContentCharSetEncoding ?? Encoding.UTF8;
+                                return encoding.GetString(output.GetBuffer(), 0, (int) output.Length);
+                            }
+                        }))
+            select f.Content;
 
         static IObservable<object> FormPost() =>
 

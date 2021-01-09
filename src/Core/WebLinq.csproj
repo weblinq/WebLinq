@@ -32,7 +32,7 @@
     <PackageReference Include="Fizzler.Systems.HtmlAgilityPack" Version="1.2.1" />
     <PackageReference Include="HtmlAgilityPack" Version="1.5.1" />
     <PackageReference Include="Mannex" Version="3.0.0" />
-    <PackageReference Include="System.Collections.Immutable" Version="1.5.0" />
+    <PackageReference Include="System.Collections.Immutable" Version="1.7.1" />
     <PackageReference Include="System.Reactive" Version="4.0.0" />
   </ItemGroup>
 
